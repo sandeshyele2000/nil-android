@@ -56,7 +56,9 @@ class MainActivity : ComponentActivity() {
         NIL.initialize(
             context = applicationContext,
             enableFloatingButton = true,
-            analyseLazyTextThresholdChars = 200_000
+            jsonTreeMaxChars = 200_000,
+            analyseLazyTextThresholdChars = 200_000,
+            requestWindowSize = 100
         )
 
         setContent {

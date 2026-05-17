@@ -35,6 +35,22 @@ interface NetworkEventDao {
     @Query("DELETE FROM network_events WHERE pinned = 0")
     suspend fun clear()
 
+    @Query("SELECT COUNT(*) FROM network_events WHERE pinned = 0")
+    suspend fun countUnpinned(): Int
+
+    @Query(
+        """
+        DELETE FROM network_events
+        WHERE id IN (
+            SELECT id FROM network_events
+            WHERE pinned = 0
+            ORDER BY timestamp ASC
+            LIMIT :count
+        )
+        """
+    )
+    suspend fun deleteOldestUnpinned(count: Int)
+
     @Query("UPDATE network_events SET pinned = :pinned WHERE id = :eventId")
     suspend fun setPinned(eventId: String, pinned: Boolean)
 }

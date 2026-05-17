@@ -9,6 +9,7 @@ It captures request/response data, stores events locally with Room, and provides
 
 - Captures HTTP traffic via a single API: `NIL.interceptor()` (OkHttp) or `NIL.interceptor("httpURL")` (HttpURLConnection).
 - Persists events in local Room database.
+- Optional in-memory mode (`disablePersistence = true`) to avoid Room storage entirely.
 - Provides inspector UI (`NILInspectorActivity`) with:
 - Event list with search.
 - Status code filter (2xx/3xx/4xx/5xx).
@@ -56,7 +57,9 @@ NIL.initialize(
     context = applicationContext,
     enableFloatingButton = true, // optional
     jsonTreeMaxChars = 200_000, // optional
-    analyseLazyTextThresholdChars = 200_000 // optional
+    analyseLazyTextThresholdChars = 200_000, // optional
+    requestWindowSize = 500, // optional; keeps latest 500 unpinned requests
+    disablePersistence = false // optional; true => skip Room persistence
 )
 ```
 
@@ -88,14 +91,16 @@ val responseBody = NIL.interceptor("httpURL").intercept(
 
 ## Public API
 
-### `NIL.initialize(context, enableFloatingButton = false, jsonTreeMaxChars = 200_000, analyseLazyTextThresholdChars = 200_000)`
+### `NIL.initialize(context, enableFloatingButton = false, jsonTreeMaxChars = 200_000, analyseLazyTextThresholdChars = 200_000, requestWindowSize = 100, disablePersistence = false)`
 
 Initializes database/repository, optional floating inspector button, and JSON tree rendering threshold.
-Safe to call multiple times; initialization runs once, while config values like `jsonTreeMaxChars` are refreshed on subsequent calls.
+Safe to call multiple times; initialization runs once, while configuration values are refreshed on subsequent calls.
 
 - `jsonTreeMaxChars` controls the max payload size (in characters) eligible for JSON tree mode in Detail/Analyse screens.
 - Above this limit, the SDK falls back to raw text mode and export/share actions.
 - `analyseLazyTextThresholdChars` controls when Analyse switches to lazy chunked raw-text rendering to avoid heavy allocations on very large payloads.
+- `requestWindowSize` sets a sliding window for retained requests (latest N unpinned events are kept; older unpinned events are dropped).
+- `disablePersistence = true` disables Room-backed storage and keeps events in-memory only for the current process lifetime.
 
 ### `NIL.interceptor()`
 

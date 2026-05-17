@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.StateFlow
 object NIL {
     private const val DEFAULT_JSON_TREE_MAX_CHARS = 200_000
     private const val DEFAULT_ANALYSE_LAZY_TEXT_THRESHOLD_CHARS = 200_000
+    private const val DEFAULT_REQUEST_WINDOW_SIZE = 100
 
     private val interceptor = NILInterceptor()
 
@@ -34,22 +35,30 @@ object NIL {
         context: Context,
         enableFloatingButton: Boolean = false,
         jsonTreeMaxChars: Int = DEFAULT_JSON_TREE_MAX_CHARS,
-        analyseLazyTextThresholdChars: Int = DEFAULT_ANALYSE_LAZY_TEXT_THRESHOLD_CHARS
+        analyseLazyTextThresholdChars: Int = DEFAULT_ANALYSE_LAZY_TEXT_THRESHOLD_CHARS,
+        requestWindowSize: Int = DEFAULT_REQUEST_WINDOW_SIZE,
+        disablePersistence: Boolean = false
     ) {
         this.jsonTreeMaxChars = jsonTreeMaxChars.coerceAtLeast(1_000)
         this.analyseLazyTextThresholdChars = analyseLazyTextThresholdChars.coerceAtLeast(10_000)
-        if (initialized) return
-
+        val normalizedWindowSize = requestWindowSize.takeIf { it > 0 } ?: DEFAULT_REQUEST_WINDOW_SIZE
         val appContext = context.applicationContext
 
-        val database = DatabaseProvider.getDatabase(appContext)
-        NILRepository.initialize(database)
+        if (!initialized) {
+            val database = if (disablePersistence) null else DatabaseProvider.getDatabase(appContext)
+            NILRepository.initialize(database)
+            initialized = true
+        } else if (!disablePersistence) {
+            NILRepository.setDatabase(DatabaseProvider.getDatabase(appContext))
+        }
+        NILRepository.configure(
+            disablePersistence = disablePersistence,
+            requestWindowSize = normalizedWindowSize
+        )
 
         if (enableFloatingButton && appContext is Application) {
             NILFloatingButtonController.initialize(appContext)
         }
-
-        initialized = true
     }
 
     /**

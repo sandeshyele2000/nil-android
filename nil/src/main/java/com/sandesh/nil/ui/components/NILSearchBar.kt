@@ -1,3 +1,7 @@
+/**
+ * Created by Sandesh Yele on 16/05/26.
+ */
+
 package com.sandesh.nil.ui.components
 
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -17,7 +21,8 @@ fun NILSearchBar(
     onValueChange: (String) -> Unit,
     placeholder: String,
     modifier: Modifier = Modifier,
-    textStyle: TextStyle? = null
+     textStyle: TextStyle? = null,
+    enabled: Boolean = true
 ) {
     val resolvedStyle = textStyle ?: MaterialTheme.typography.bodyMedium
     OutlinedTextField(
@@ -28,6 +33,7 @@ fun NILSearchBar(
             .height(50.dp),
         shape = RoundedCornerShape(24.dp),
         textStyle = resolvedStyle,
+        enabled = enabled,
         placeholder = {
             Text(
                 text = placeholder,

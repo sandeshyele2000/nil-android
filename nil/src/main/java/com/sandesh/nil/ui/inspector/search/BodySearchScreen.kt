@@ -1,3 +1,7 @@
+/**
+ * Created by Sandesh Yele on 16/05/26.
+ */
+
 package com.sandesh.nil.ui.inspector.search
 
 import androidx.compose.foundation.background
@@ -9,6 +13,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -20,6 +25,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.filled.KeyboardArrowDown
@@ -29,6 +35,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -46,6 +53,13 @@ import com.sandesh.nil.ui.inspector.json.JsonTreeViewer
 import com.sandesh.nil.ui.theme.NILColors
 import com.sandesh.nil.utils.ShareFileUtil
 import androidx.compose.ui.platform.LocalContext
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
+import java.util.Locale
+
+private const val BODY_SEARCH_DEBOUNCE_MS = 180L
+private const val BODY_PREVIEW_ONLY_MAX_CHARS = 20_000
 
 @Composable
 fun BodySearchScreen(
@@ -54,31 +68,62 @@ fun BodySearchScreen(
     onBack: () -> Unit,
     modifier: Modifier
 ) {
-    val largeTextThresholdChars = NIL.analyseLazyTextThresholdChars()
+    val payloadCharLimit = NIL.inspectorPayloadCharLimit()
     val context = LocalContext.current
+    val isLargeJsonPreviewMode = body.trim().startsWith("{").let { startsObject ->
+        (startsObject || body.trim().startsWith("[")) && body.length > payloadCharLimit
+    }
+    val displayBody = remember(body, payloadCharLimit) {
+        if (isLargeJsonPreviewMode) body else body.toPreviewOnlyBody(payloadCharLimit)
+    }
     var query by rememberSaveable { mutableStateOf("") }
     var currentMatch by rememberSaveable { mutableIntStateOf(0) }
     var jsonMatchCount by rememberSaveable { mutableIntStateOf(0) }
     var jsonPathMode by rememberSaveable { mutableStateOf(false) }
-    val isJson = body.trim().startsWith("{") || body.trim().startsWith("[")
-    val isBodyMissing = body.isBlank()
-    val isHeavyPayload = body.length > largeTextThresholdChars
-    val jsonTreeMaxChars = NIL.jsonTreeMaxChars()
-    val canRenderJsonTree = isJson && body.length <= jsonTreeMaxChars
+    val isJson = displayBody.trim().startsWith("{") || displayBody.trim().startsWith("[")
+    val isBodyMissing = displayBody.isBlank()
+    val searchDisabled = body.length > payloadCharLimit
+    val canRenderJsonTree = isJson && !searchDisabled
     val effectiveJsonMode = isJson && canRenderJsonTree
+    val textSearchState by produceState<TextSearchState>(
+        initialValue = TextSearchState.Loading,
+        displayBody,
+        query,
+        effectiveJsonMode,
+        searchDisabled
+    ) {
+        if (effectiveJsonMode) {
+            value = TextSearchState.Empty
+            return@produceState
+        }
 
-    val textMatches = remember(query, body, effectiveJsonMode, isHeavyPayload) {
-        if (effectiveJsonMode || isHeavyPayload) emptyList() else SearchHighlighter.findMatches(body, query)
-    }
-    val totalMatches = if (effectiveJsonMode) jsonMatchCount else textMatches.size
+        val lines = withContext(Dispatchers.Default) { displayBody.split('\n') }
+        if (query.isBlank() || searchDisabled) {
+            value = TextSearchState.Ready(
+                lines = lines,
+                lineMatchIndexes = emptyList(),
+                totalMatches = 0
+            )
+            return@produceState
+        }
 
-    val lines = remember(body, isHeavyPayload) {
-        if (isHeavyPayload) emptyList() else body.split('\n')
+        value = TextSearchState.Loading
+        delay(BODY_SEARCH_DEBOUNCE_MS)
+        value = withContext(Dispatchers.Default) {
+            val matchIndexes = lines.mapIndexedNotNull { index, line ->
+                if (line.contains(query, ignoreCase = true)) index else null
+            }
+            TextSearchState.Ready(
+                lines = lines,
+                lineMatchIndexes = matchIndexes,
+                totalMatches = matchIndexes.size
+            )
+        }
     }
-    val lineMatchIndexes = remember(query, lines, isHeavyPayload) {
-        if (isHeavyPayload || query.isBlank()) emptyList()
-        else lines.mapIndexedNotNull { idx, line -> if (line.contains(query, ignoreCase = true)) idx else null }
-    }
+    val textSearchResult = textSearchState as? TextSearchState.Ready
+    val totalMatches = if (effectiveJsonMode) jsonMatchCount else textSearchResult?.totalMatches ?: 0
+    val lines = textSearchResult?.lines.orEmpty()
+    val lineMatchIndexes = textSearchResult?.lineMatchIndexes.orEmpty()
     val lineListState = rememberLazyListState()
 
     LaunchedEffect(currentMatch, lineMatchIndexes, effectiveJsonMode) {
@@ -135,25 +180,25 @@ fun BodySearchScreen(
                 return@Column
             }
 
-            if (isHeavyPayload) {
-                DetailEmptyState(
-                    label = "Payload too large to preview (${body.length} chars > $largeTextThresholdChars). Use Share to export payload."
-                )
-                return@Column
-            }
-
             NILSearchBar(
                 value = query,
                 onValueChange = { value ->
                     query = value
                     currentMatch = 0
                 },
-                placeholder = if (jsonPathMode && isJson) "Search JSON path..." else "Search..."
+                placeholder = when {
+                    searchDisabled -> "Search disabled for large payload"
+                    jsonPathMode && isJson -> "Search JSON path..."
+                    else -> "Search..."
+                },
+                enabled = !searchDisabled
             )
             Spacer(modifier = Modifier.height(8.dp))
-            if (isJson && !canRenderJsonTree) {
-                DetailEmptyState(
-                    label = "JSON too large for tree view (${body.length} chars > $jsonTreeMaxChars). Search raw text or export payload."
+            if (searchDisabled) {
+                Text(
+                    text = "Payload too huge to be searched",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Spacer(modifier = Modifier.height(8.dp))
                 OutlinedButton(
@@ -184,8 +229,8 @@ fun BodySearchScreen(
                     FilterChip(
                         selected = jsonPathMode,
                         onClick = {
-                            jsonPathMode = true
-                            currentMatch = 0
+                    jsonPathMode = true
+                    currentMatch = 0
                         },
                         label = { Text("Path") }
                     )
@@ -226,7 +271,7 @@ fun BodySearchScreen(
 
             if (effectiveJsonMode) {
                 JsonTreeViewer(
-                    json = body,
+                    json = displayBody,
                     query = query,
                     pathSearchMode = jsonPathMode,
                     activeMatchIndex = currentMatch,
@@ -236,16 +281,28 @@ fun BodySearchScreen(
                     },
                     enableInternalScroll = true
                 )
+            } else if (isLargeJsonPreviewMode) {
+                JsonTreeViewer(
+                    json = body,
+                    enableInternalScroll = true,
+                    forceLazyMode = true
+                )
             } else {
+                if (!searchDisabled && textSearchState == TextSearchState.Loading) {
+                    SearchLoader("Searching payload...")
+                }
                 LazyColumn(state = lineListState, modifier = Modifier.fillMaxSize()) {
                     itemsIndexed(lines) { index, line ->
                         val isLineMatched =
-                            query.isNotBlank() && line.contains(query, ignoreCase = true)
+                            !searchDisabled && query.isNotBlank() && line.contains(query, ignoreCase = true)
                         val isActiveLine =
                             isLineMatched && lineMatchIndexes.getOrNull(currentMatch) == index
 
                         Text(
-                            text = line.annotateQuery(query, NILColors.jsonMatch()),
+                            text = line.annotateQuery(
+                                query = if (searchDisabled) "" else query,
+                                matchColor = NILColors.jsonMatch()
+                            ),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier
@@ -277,6 +334,41 @@ private fun emptyAnalyseLabel(title: String): String {
     }
 }
 
+private fun formatCharCount(value: Int): String = String.format(Locale.US, "%,d", value)
+
+private fun String.toPreviewOnlyBody(payloadCharLimit: Int): String {
+    if (length <= payloadCharLimit) return this
+    if (length <= BODY_PREVIEW_ONLY_MAX_CHARS) return this
+
+    val omittedChars = length - BODY_PREVIEW_ONLY_MAX_CHARS
+    return buildString(BODY_PREVIEW_ONLY_MAX_CHARS + 96) {
+        append(this@toPreviewOnlyBody, 0, BODY_PREVIEW_ONLY_MAX_CHARS)
+        append("\n\n[preview truncated; ")
+        append(omittedChars)
+        append(" chars omitted]")
+    }
+}
+
+@Composable
+private fun SearchLoader(label: String) {
+    Row(
+        modifier = Modifier.padding(vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        CircularProgressIndicator(
+            modifier = Modifier
+                .size(16.dp),
+            strokeWidth = 2.dp
+        )
+        Spacer(modifier = Modifier.width(8.dp))
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
 private fun String.annotateQuery(query: String, matchColor: androidx.compose.ui.graphics.Color) = buildAnnotatedString {
     if (query.isBlank()) {
         append(this@annotateQuery)
@@ -297,4 +389,14 @@ private fun String.annotateQuery(query: String, matchColor: androidx.compose.ui.
         }
         cursor = match + q.length
     }
+}
+
+private sealed interface TextSearchState {
+    data object Loading : TextSearchState
+    data object Empty : TextSearchState
+    data class Ready(
+        val lines: List<String>,
+        val lineMatchIndexes: List<Int>,
+        val totalMatches: Int
+    ) : TextSearchState
 }

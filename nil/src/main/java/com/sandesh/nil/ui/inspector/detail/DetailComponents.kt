@@ -1,3 +1,7 @@
+/**
+ * Created by Sandesh Yele on 16/05/26.
+ */
+
 package com.sandesh.nil.ui.inspector.detail
 
 import androidx.compose.foundation.layout.Arrangement
@@ -26,6 +30,7 @@ import androidx.compose.ui.unit.dp
 @Composable
 internal fun SectionActionButtons(
     onSearch: (() -> Unit)?,
+    searchEnabled: Boolean = true,
     onShare: (() -> Unit)?,
     modifier: Modifier = Modifier
 ) {
@@ -36,7 +41,10 @@ internal fun SectionActionButtons(
         horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         if (onSearch != null) {
-            OutlinedButton(onClick = onSearch) {
+            OutlinedButton(
+                onClick = onSearch,
+                enabled = searchEnabled
+            ) {
                 Icon(
                     Icons.AutoMirrored.Filled.ManageSearch,
                     contentDescription = "Search",
@@ -157,10 +165,15 @@ internal fun toKeyValueText(pairs: List<DetailPair>): String {
 @Composable
 internal fun SectionContent(
     onSearch: (() -> Unit)?,
+    searchEnabled: Boolean = true,
     onShare: (() -> Unit)?,
     content: @Composable () -> Unit
 ) {
-    SectionActionButtons(onSearch = onSearch, onShare = onShare)
+    SectionActionButtons(
+        onSearch = onSearch,
+        searchEnabled = searchEnabled,
+        onShare = onShare
+    )
     if (onSearch != null || onShare != null) {
         Spacer(modifier = Modifier.height(8.dp))
     }

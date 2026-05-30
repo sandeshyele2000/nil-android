@@ -1,6 +1,11 @@
+/**
+ * Created by Sandesh Yele on 16/05/26.
+ */
+
 package com.sandesh.nil.ui.inspector
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -9,6 +14,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.sandesh.nil.core.NIL
+import com.sandesh.nil.model.NetworkEvent
+import com.sandesh.nil.ui.inspector.detail.DetailLoadingState
 import com.sandesh.nil.ui.inspector.detail.EventDetailScreen
 import com.sandesh.nil.ui.inspector.list.EventListScreen
 import com.sandesh.nil.ui.inspector.search.BodySearchScreen
@@ -22,11 +29,24 @@ fun NILInspectorScreen(
     val events by NIL.events.collectAsStateWithLifecycle()
 
     var selectedId by rememberSaveable { mutableStateOf<String?>(null) }
-    var analyseTitle by rememberSaveable { mutableStateOf<String?>(null) }
-    var analysePayload by rememberSaveable { mutableStateOf<String?>(null) }
+    var selectedEvent by remember { mutableStateOf<NetworkEvent?>(null) }
+    var isLoadingSelectedEvent by remember { mutableStateOf(false) }
+    var analyseTitle by remember { mutableStateOf<String?>(null) }
+    var analysePayload by remember { mutableStateOf<String?>(null) }
 
-    val selected = remember(selectedId, events) {
-        events.firstOrNull { it.id == selectedId }
+    LaunchedEffect(selectedId) {
+        if (selectedId == null) {
+            selectedEvent = null
+            isLoadingSelectedEvent = false
+            return@LaunchedEffect
+        }
+
+        isLoadingSelectedEvent = true
+        selectedEvent = NIL.getEventById(selectedId.orEmpty())
+        isLoadingSelectedEvent = false
+        if (selectedEvent == null) {
+            selectedId = null
+        }
     }
 
     when {
@@ -42,16 +62,23 @@ fun NILInspectorScreen(
             )
         }
 
-        selected != null -> {
+        selectedEvent != null -> {
             EventDetailScreen(
-                event = selected,
-                onBack = { selectedId = null },
+                event = selectedEvent!!,
+                onBack = {
+                    selectedId = null
+                    selectedEvent = null
+                },
                 onAnalyse = { title, payload ->
                     analyseTitle = title
                     analysePayload = payload
                 },
                 modifier = modifier
             )
+        }
+
+        isLoadingSelectedEvent -> {
+            DetailLoadingState(label = "Loading event details...")
         }
 
         else -> {

@@ -1,3 +1,7 @@
+/**
+ * Created by Sandesh Yele on 16/05/26.
+ */
+
 package com.sandesh.nil.utils
 
 import com.sandesh.nil.model.NetworkEvent
@@ -9,9 +13,10 @@ object CurlGenerator {
             .append(" -X ")
             .append(request.method)
 
-        request.headers.forEach { header ->
+        val headers = request.headers
+        for (index in 0 until headers.size) {
             sb.append(" -H ")
-                .append(escape("'${header.first}: ${header.second}'"))
+                .append(escape("'${headers.name(index)}: ${headers.value(index)}'"))
         }
 
         val body = RequestBodyReader.read(request)

@@ -1,3 +1,7 @@
+/**
+ * Created by Sandesh Yele on 16/05/26.
+ */
+
 package com.sandesh.nil.ui.inspector.list
 
 import androidx.compose.foundation.background
@@ -38,9 +42,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.Alignment
 import com.sandesh.nil.core.NIL
-import com.sandesh.nil.model.NetworkEvent
+import com.sandesh.nil.model.NetworkEventSummary
 import com.sandesh.nil.ui.components.NILSearchBar
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+
+private const val EVENT_LIST_FILTER_DEBOUNCE_MS = 250L
 
 private enum class StatusFilter(val label: String) {
     ALL("All"),
@@ -53,8 +60,8 @@ private enum class StatusFilter(val label: String) {
 
 @Composable
 fun EventListScreen(
-    events: List<NetworkEvent>,
-    onClick: (NetworkEvent) -> Unit,
+    events: List<NetworkEventSummary>,
+    onClick: (NetworkEventSummary) -> Unit,
     onBack: () -> Unit,
     modifier: Modifier
 ) {
@@ -66,6 +73,7 @@ fun EventListScreen(
     val scope = rememberCoroutineScope()
 
     LaunchedEffect(query) {
+        delay(EVENT_LIST_FILTER_DEBOUNCE_MS)
         NIL.setFilter(query)
     }
 
@@ -122,7 +130,7 @@ fun EventListScreen(
                 StatusFilter.STATUS_3XX -> (event.statusCode ?: -1) in 300..399
                 StatusFilter.STATUS_4XX -> (event.statusCode ?: -1) in 400..499
                 StatusFilter.STATUS_5XX -> (event.statusCode ?: -1) in 500..599
-                StatusFilter.ERROR -> true
+                StatusFilter.ERROR -> event.statusCode == null || event.statusCode >= 400
             }
         }
     }
@@ -188,7 +196,7 @@ fun EventListScreen(
             NILSearchBar(
                 value = query,
                 onValueChange = { query = it },
-                placeholder = "Search URL / method / body",
+                placeholder = "Search URL / method",
                 textStyle = MaterialTheme.typography.bodyMedium
             )
             Spacer(modifier = Modifier.height(8.dp))

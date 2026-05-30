@@ -1,3 +1,7 @@
+/**
+ * Created by Sandesh Yele on 16/05/26.
+ */
+
 package com.sandesh.nil.interceptor
 
 import com.sandesh.nil.utils.RequestBodyReader
@@ -63,10 +67,10 @@ class NILInterceptor : Interceptor {
 }
 
 private fun okhttp3.Headers.toFlatString(): String = buildString {
-    this@toFlatString.forEach { header ->
-        append(header.first)
+    for (index in 0 until size) {
+        append(name(index))
         append(": ")
-        append(header.second)
+        append(value(index))
         append('\n')
     }
 }.trimEnd()

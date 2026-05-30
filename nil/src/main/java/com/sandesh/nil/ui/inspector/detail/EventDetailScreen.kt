@@ -1,3 +1,7 @@
+/**
+ * Created by Sandesh Yele on 16/05/26.
+ */
+
 package com.sandesh.nil.ui.inspector.detail
 
 import android.net.Uri
@@ -35,6 +39,7 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.sandesh.nil.core.NIL
 import com.sandesh.nil.model.NetworkEvent
 import com.sandesh.nil.utils.CurlGenerator
 import com.sandesh.nil.utils.ShareFileUtil
@@ -58,6 +63,9 @@ fun EventDetailScreen(
     val requestParams = remember(event.url) { parseRequestParams(event.url) }
     val requestHeaderPairs = remember(event.requestHeaders) { parseHeaderPairs(event.requestHeaders) }
     val responseHeaderPairs = remember(event.responseHeaders) { parseHeaderPairs(event.responseHeaders) }
+    val payloadCharLimit = NIL.inspectorPayloadCharLimit()
+    val requestBodySearchEnabled = (event.requestBody?.length ?: 0) <= payloadCharLimit
+    val responseBodySearchEnabled = (event.responseBody?.length ?: 0) <= payloadCharLimit
 
     Column(
         modifier = modifier
@@ -203,6 +211,7 @@ fun EventDetailScreen(
                             onSearch = {
                                 onAnalyse("Request Body", event.requestBody.orEmpty())
                             },
+                            searchEnabled = requestBodySearchEnabled,
                             onShare = {
                                 ShareFileUtil.shareTextFile(
                                     context = context,
@@ -255,6 +264,7 @@ fun EventDetailScreen(
                             onSearch = {
                                 onAnalyse("Response Body", event.responseBody.orEmpty())
                             },
+                            searchEnabled = responseBodySearchEnabled,
                             onShare = {
                                 ShareFileUtil.shareTextFile(
                                     context = context,

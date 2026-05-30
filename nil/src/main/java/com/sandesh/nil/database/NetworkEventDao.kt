@@ -1,3 +1,7 @@
+/**
+ * Created by Sandesh Yele on 16/05/26.
+ */
+
 package com.sandesh.nil.database
 
 import androidx.room.Dao
@@ -5,6 +9,7 @@ import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import com.sandesh.nil.model.NetworkEvent
+import com.sandesh.nil.model.NetworkEventSummary
 import kotlinx.coroutines.flow.Flow
 
 
@@ -15,42 +20,62 @@ interface NetworkEventDao {
     suspend fun insert(networkEvent: NetworkEvent)
 
     @Query("""
-        SELECT * FROM network_events
+        SELECT
+            id,
+            url,
+            method,
+            statusCode,
+            durationMs,
+            timestamp,
+            pinned
+        FROM network_events
         ORDER BY timestamp DESC
     """)
-    fun observeAll(): Flow<List<NetworkEvent>>
+    fun observeAll(): Flow<List<NetworkEventSummary>>
 
     @Query(
         """
-        SELECT * FROM network_events
+        SELECT
+            id,
+            url,
+            method,
+            statusCode,
+            durationMs,
+            timestamp,
+            pinned
+        FROM network_events
         WHERE url LIKE '%' || :query || '%'
            OR method LIKE '%' || :query || '%'
-           OR requestBody LIKE '%' || :query || '%'
-           OR responseBody LIKE '%' || :query || '%'
         ORDER BY timestamp DESC
         """
     )
-    fun observeByQuery(query: String): Flow<List<NetworkEvent>>
+    fun observeByQuery(query: String): Flow<List<NetworkEventSummary>>
 
     @Query("DELETE FROM network_events WHERE pinned = 0")
     suspend fun clear()
 
-    @Query("SELECT COUNT(*) FROM network_events WHERE pinned = 0")
-    suspend fun countUnpinned(): Int
+    @Query("UPDATE network_events SET pinned = :pinned WHERE id = :eventId")
+    suspend fun setPinned(eventId: String, pinned: Boolean)
 
     @Query(
         """
         DELETE FROM network_events
         WHERE id IN (
-            SELECT id FROM network_events
-            WHERE pinned = 0
-            ORDER BY timestamp ASC
-            LIMIT :count
+            SELECT id
+            FROM network_events
+            ORDER BY timestamp DESC
+            LIMIT -1 OFFSET :maxRows
         )
         """
     )
-    suspend fun deleteOldestUnpinned(count: Int)
+    suspend fun trimToLatest(maxRows: Int)
 
-    @Query("UPDATE network_events SET pinned = :pinned WHERE id = :eventId")
-    suspend fun setPinned(eventId: String, pinned: Boolean)
+    @Query(
+        """
+        SELECT * FROM network_events
+        WHERE id = :id
+        LIMIT 1
+        """
+    )
+    suspend fun getEventById(id: String): NetworkEvent?
 }

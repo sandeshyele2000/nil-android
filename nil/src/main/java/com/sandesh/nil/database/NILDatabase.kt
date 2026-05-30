@@ -1,3 +1,7 @@
+/**
+ * Created by Sandesh Yele on 16/05/26.
+ */
+
 package com.sandesh.nil.database
 
 import androidx.room.Database
@@ -9,7 +13,7 @@ import com.sandesh.nil.model.NetworkEvent
         NetworkEvent::class
     ],
     version = 2,
-    exportSchema = true
+    exportSchema = false
 )
 abstract class NILDatabase: RoomDatabase() {
     abstract fun networkEventDao(): NetworkEventDao

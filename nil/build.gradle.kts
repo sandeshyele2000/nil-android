@@ -5,9 +5,6 @@ plugins {
     id("com.vanniktech.maven.publish") version "0.30.0"
 }
 
-ksp {
-    arg("room.schemaLocation", "$projectDir/schemas")
-}
 
 android {
     namespace = "com.sandesh.nil"

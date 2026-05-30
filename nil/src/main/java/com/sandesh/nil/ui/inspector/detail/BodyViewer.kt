@@ -1,50 +1,45 @@
+/**
+ * Created by Sandesh Yele on 16/05/26.
+ */
+
 package com.sandesh.nil.ui.inspector.detail
 
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
-import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.viewinterop.AndroidView
 import com.sandesh.nil.core.NIL
-import com.sandesh.nil.ui.inspector.json.JsonTreeViewer
 import com.sandesh.nil.utils.BodyPrettyPrinter
-import android.graphics.Color
-import android.webkit.WebView
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+
+private const val BODY_PREVIEW_MAX_CHARS = 1_200
 
 @Composable
 fun BodyViewer(
     body: String?,
     headers: String?
 ) {
-    val rawBody = body.orEmpty()
-    val jsonTreeMaxChars = NIL.jsonTreeMaxChars()
-    val heavyPayloadThreshold = NIL.analyseLazyTextThresholdChars()
-    val prepared by produceState<PreparedBody?>(initialValue = null, key1 = body, key2 = headers, key3 = heavyPayloadThreshold) {
+    val payloadCharLimit = NIL.inspectorPayloadCharLimit()
+    val prepared by produceState<PreparedBody?>(
+        initialValue = null,
+        key1 = body,
+        key2 = headers,
+        key3 = payloadCharLimit
+    ) {
         value = withContext(Dispatchers.Default) {
             val sourceBody = body.orEmpty()
-            val isHeavyPayload = sourceBody.length > heavyPayloadThreshold
-            val computedBody = if (isHeavyPayload) sourceBody else BodyPrettyPrinter.prettyPrint(body, headers).orEmpty()
+            val searchDisabled = sourceBody.length > payloadCharLimit
+            val computedBody = if (searchDisabled) sourceBody else BodyPrettyPrinter.prettyPrint(body, headers).orEmpty()
             PreparedBody(
                 body = computedBody,
-                isHeavyPayload = isHeavyPayload,
-                isJson = computedBody.trim().startsWith("{") || computedBody.trim().startsWith("["),
-                isHtml = isHtmlBody(computedBody, headers)
+                searchDisabled = searchDisabled,
+                isTruncated = computedBody.length > BODY_PREVIEW_MAX_CHARS
             )
         }
     }
@@ -53,98 +48,36 @@ fun BodyViewer(
         return
     }
     val prettyBody = preparedBody.body
-    val isHeavyPayload = preparedBody.isHeavyPayload
-    val isJson = preparedBody.isJson
-    val isHtml = preparedBody.isHtml
-    val canRenderJsonTree = prettyBody.length <= jsonTreeMaxChars
-    var expanded by rememberSaveable(prettyBody) { mutableStateOf(false) }
-    var htmlMode by rememberSaveable(prettyBody, headers) { mutableStateOf(false) }
+    val searchDisabled = preparedBody.searchDisabled
+    val isTruncated = preparedBody.isTruncated
 
     if (prettyBody.isBlank()) {
         DetailEmptyState(label = "No body available")
         return
     }
 
-    if (isHeavyPayload) {
-        DetailEmptyState(label = "Payload too large to preview (${rawBody.length} chars > $heavyPayloadThreshold).")
-        return
-    }
-
-    if (isJson && canRenderJsonTree) {
-        JsonTreeViewer(
-            json = prettyBody,
-            enableInternalScroll = false
-        )
-        return
-    }
-    if (isJson && !canRenderJsonTree) {
-        DetailEmptyState(label = "JSON too large for tree view (${prettyBody.length} chars > $jsonTreeMaxChars).")
-        Spacer(modifier = Modifier.height(8.dp))
-    }
-
-    if (isHtml) {
-        Column {
-            Row {
-                FilterChip(
-                    selected = !htmlMode,
-                    onClick = { htmlMode = false },
-                    label = { Text("Raw") }
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                FilterChip(
-                    selected = htmlMode,
-                    onClick = { htmlMode = true },
-                    label = { Text("HTML") }
-                )
-            }
-            Spacer(modifier = Modifier.height(8.dp))
-            if (htmlMode) {
-                AndroidView(
-                    factory = { context ->
-                        WebView(context).apply {
-                            setBackgroundColor(Color.TRANSPARENT)
-                            loadDataWithBaseURL(null, prettyBody, "text/html", "utf-8", null)
-                        }
-                    },
-                    update = { webView ->
-                        webView.loadDataWithBaseURL(null, prettyBody, "text/html", "utf-8", null)
-                    },
-                    modifier = Modifier
-                        .height(260.dp)
-                        .padding(bottom = 6.dp)
-                )
-            }
-        }
-        if (htmlMode) return
-    }
-
-    val preview = if (expanded || prettyBody.length <= 300) prettyBody else prettyBody.take(300)
+    val preview = prettyBody.take(BODY_PREVIEW_MAX_CHARS)
     Text(
         text = preview,
         style = MaterialTheme.typography.bodySmall
     )
 
-    if (prettyBody.length > 300) {
+    if (isTruncated) {
         Spacer(modifier = Modifier.height(6.dp))
         Text(
-            text = if (expanded) "Show less" else "Show more",
-            style = MaterialTheme.typography.labelLarge,
-            color = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.clickable { expanded = !expanded }
+            text = if (searchDisabled) {
+                "Preview truncated. Search is unavailable for large payloads. Use Share to export the full payload."
+            } else {
+                "Preview truncated. Use Search to inspect the full payload."
+            },
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
         )
     }
 }
 
 private data class PreparedBody(
     val body: String,
-    val isHeavyPayload: Boolean,
-    val isJson: Boolean,
-    val isHtml: Boolean
+    val searchDisabled: Boolean,
+    val isTruncated: Boolean
 )
-
-private fun isHtmlBody(body: String, headers: String?): Boolean {
-    val lowerHeaders = headers.orEmpty().lowercase()
-    if (lowerHeaders.contains("content-type: text/html")) return true
-    val trimmed = body.trimStart().lowercase()
-    return trimmed.startsWith("<!doctype html") || trimmed.startsWith("<html")
-}

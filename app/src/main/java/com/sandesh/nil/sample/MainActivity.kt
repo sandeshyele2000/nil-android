@@ -56,9 +56,9 @@ class MainActivity : ComponentActivity() {
         NIL.initialize(
             context = applicationContext,
             enableFloatingButton = true,
-            jsonTreeMaxChars = 200_000,
-            analyseLazyTextThresholdChars = 200_000,
-            requestWindowSize = 100
+            inspectorPayloadCharLimit = 200_000,
+            maxStoredEvents = 100,
+            persistenceEnabled = true
         )
 
         setContent {
@@ -294,7 +294,7 @@ private suspend fun runHttpUrlConnectionCall(): String {
                 readTimeout = 15_000
             }
 
-            val responseBody = NIL.interceptor("httpURL").intercept(
+            val responseBody = NIL.interceptor(NIL.InterceptorType.HTTP_URL_CONNECTION).intercept(
                 connection = connection,
                 execute = { conn ->
                     conn.inputStream.bufferedReader().use { reader -> reader.readText() }

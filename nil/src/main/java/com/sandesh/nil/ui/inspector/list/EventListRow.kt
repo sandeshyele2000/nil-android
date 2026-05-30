@@ -1,3 +1,7 @@
+/**
+ * Created by Sandesh Yele on 16/05/26.
+ */
+
 package com.sandesh.nil.ui.inspector.list
 
 import androidx.compose.foundation.clickable
@@ -27,16 +31,16 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import com.sandesh.nil.model.NetworkEvent
+import com.sandesh.nil.model.NetworkEventSummary
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
 @Composable
 fun EventListRow(
-    event: NetworkEvent,
-    onClick: (NetworkEvent) -> Unit,
-    onPinToggle: (NetworkEvent) -> Unit
+    event: NetworkEventSummary,
+    onClick: (NetworkEventSummary) -> Unit,
+    onPinToggle: (NetworkEventSummary) -> Unit
 ) {
     val statusColor = when (event.statusCode) {
         in 200..299 -> MaterialTheme.colorScheme.primary

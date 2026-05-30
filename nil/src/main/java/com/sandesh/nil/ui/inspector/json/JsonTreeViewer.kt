@@ -1,3 +1,7 @@
+/**
+ * Created by Sandesh Yele on 16/05/26.
+ */
+
 package com.sandesh.nil.ui.inspector.json
 
 import androidx.compose.animation.animateContentSize
@@ -18,30 +22,39 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import com.sandesh.nil.ui.theme.NILColors
 import com.sandesh.nil.utils.json.JsonTreeBuilder
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+
+private const val JSON_SEARCH_DEBOUNCE_MS = 180L
 
 @Composable
 fun JsonTreeViewer(
@@ -50,64 +63,139 @@ fun JsonTreeViewer(
     pathSearchMode: Boolean = false,
     activeMatchIndex: Int = 0,
     onMatchCountChanged: ((Int) -> Unit)? = null,
-    enableInternalScroll: Boolean = false
+    enableInternalScroll: Boolean = false,
+    forceLazyMode: Boolean = false
 ) {
-    val root by produceState<JsonNode?>(initialValue = null, key1 = json) {
-        value = withContext(Dispatchers.Default) {
-            JsonTreeBuilder.build(json)
-        }
-    }
-
     if (json.isNullOrBlank()) {
         Text("No JSON payload", style = MaterialTheme.typography.bodySmall)
         return
     }
-    val rootNode = root ?: run {
-        Row(
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 9.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            CircularProgressIndicator(
-                modifier = Modifier.size(16.dp),
-                strokeWidth = 2.dp
-            )
-            Spacer(modifier = Modifier.width(8.dp))
-            Text("Preparing JSON tree...", style = MaterialTheme.typography.bodySmall)
+
+    val documentState by produceState<JsonDocumentState>(
+        initialValue = JsonDocumentState.Loading,
+        key1 = json,
+        key2 = forceLazyMode
+    ) {
+        value = JsonDocumentState.Loading
+        value = withContext(Dispatchers.Default) {
+            val root = if (forceLazyMode) {
+                JsonTreeBuilder.buildLazy(json)
+            } else {
+                JsonTreeBuilder.build(json)
+            }
+            if (root == null) {
+                JsonDocumentState.Error("Unable to parse JSON payload")
+            } else {
+                JsonDocumentState.Ready(
+                    root = root,
+                    searchEntries = if (forceLazyMode) emptyList() else JsonTreeDocument.buildSearchEntries(root)
+                )
+            }
         }
-        return
     }
 
-    val expanded = remember(json) {
-        mutableStateMapOf<String, Boolean>().apply { put("root", true) }
-    }
-    val forceExpandAll = query.isNotBlank()
-    val rows = remember(rootNode, expanded.toMap(), query, pathSearchMode) {
-        val out = mutableListOf<JsonRenderRow>()
-        val pathFilter = query.takeIf { pathSearchMode && it.isNotBlank() }
-        appendRows(
-            rootNode,
-            path = "root",
-            depth = 0,
-            expanded = expanded,
-            out = out,
-            pathFilter = pathFilter,
-            forceExpandAll = forceExpandAll
+    when (val state = documentState) {
+        JsonDocumentState.Loading -> LoadingBanner("Preparing JSON tree...")
+        is JsonDocumentState.Error -> Text(state.message, style = MaterialTheme.typography.bodySmall)
+        is JsonDocumentState.Ready -> JsonTreeContent(
+            initialRoot = state.root,
+            searchEntries = state.searchEntries,
+            query = query,
+            pathSearchMode = pathSearchMode,
+            activeMatchIndex = activeMatchIndex,
+            onMatchCountChanged = onMatchCountChanged,
+            enableInternalScroll = enableInternalScroll,
+            json = json,
+            forceLazyMode = forceLazyMode
         )
-        out
     }
-    val matches = remember(query, rows) {
-        if (query.isBlank()) emptyList()
-        else rows.mapIndexedNotNull { index, row ->
-            if (row.matchesQuery(query, pathSearchMode)) index else null
-        }
+}
+
+@Composable
+private fun JsonTreeContent(
+    initialRoot: JsonNode,
+    searchEntries: List<JsonSearchEntry>,
+    query: String,
+    pathSearchMode: Boolean,
+    activeMatchIndex: Int,
+    onMatchCountChanged: ((Int) -> Unit)?,
+    enableInternalScroll: Boolean,
+    json: String,
+    forceLazyMode: Boolean
+) {
+    val scope = rememberCoroutineScope()
+    val expanded = remember(json) {
+        mutableStateMapOf<String, Boolean>().apply { put(ROOT_PATH, true) }
     }
-    LaunchedEffect(matches.size) {
-        onMatchCountChanged?.invoke(matches.size)
+    val loadingPaths = remember(json) { mutableStateMapOf<String, Boolean>() }
+    var rootNode by remember(json, initialRoot) { mutableStateOf(initialRoot) }
+
+    val manualExpandedPaths = remember(expanded.toMap()) {
+        expanded.filterValues { it }.keys
     }
 
-    val activeItemIndex = matches.getOrNull(activeMatchIndex.coerceAtLeast(0))
+    val searchState by produceState<JsonSearchState>(
+        initialValue = JsonSearchState.Idle,
+        searchEntries,
+        query,
+        pathSearchMode,
+        forceLazyMode
+    ) {
+        if (forceLazyMode || query.isBlank()) {
+            value = JsonSearchState.Idle
+            return@produceState
+        }
+
+        value = JsonSearchState.Loading
+        delay(JSON_SEARCH_DEBOUNCE_MS)
+        value = withContext(Dispatchers.Default) {
+            JsonSearchState.Ready(
+                JsonTreeDocument.findMatches(
+                    entries = searchEntries,
+                    query = query,
+                    pathSearchMode = pathSearchMode
+                )
+            )
+        }
+    }
+
+    val activeMatch = (searchState as? JsonSearchState.Ready)
+        ?.matches
+        ?.getOrNull(activeMatchIndex.coerceAtLeast(0))
+    val autoExpandedPaths = activeMatch?.expansionPaths.orEmpty()
+    val effectiveExpandedPaths = remember(manualExpandedPaths, autoExpandedPaths) {
+        (manualExpandedPaths + autoExpandedPaths).toSet()
+    }
+
+    val visibleRows by produceState<List<JsonRenderRow>>(
+        initialValue = emptyList(),
+        key1 = rootNode,
+        key2 = effectiveExpandedPaths,
+        key3 = loadingPaths.keys.toSet()
+    ) {
+        value = withContext(Dispatchers.Default) {
+            JsonTreeDocument.buildVisibleRows(
+                root = rootNode,
+                expandedPaths = effectiveExpandedPaths,
+                loadingPaths = loadingPaths.keys
+            )
+        }
+    }
+
+    val matchedPaths = ((searchState as? JsonSearchState.Ready)?.matches ?: emptyList())
+        .map(JsonSearchEntry::path)
+        .toSet()
+    LaunchedEffect(searchState) {
+        onMatchCountChanged?.invoke((searchState as? JsonSearchState.Ready)?.matches?.size ?: 0)
+    }
+
+    val activePath = activeMatch?.path
+    val activeItemIndex = remember(visibleRows, activePath) {
+        visibleRows.indexOfFirst { it.path == activePath }.takeIf { it >= 0 }
+    }
     val listState = rememberLazyListState()
     val horizontalScrollState = rememberScrollState()
+
     LaunchedEffect(activeItemIndex, enableInternalScroll) {
         if (enableInternalScroll && activeItemIndex != null) {
             listState.animateScrollToItem(activeItemIndex)
@@ -117,8 +205,20 @@ fun JsonTreeViewer(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f), RoundedCornerShape(10.dp))
+            .background(
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+                shape = RoundedCornerShape(10.dp)
+            )
     ) {
+        when (searchState) {
+            JsonSearchState.Loading -> LoadingBanner("Searching JSON...")
+            JsonSearchState.Idle,
+            is JsonSearchState.Ready -> Unit
+        }
+        if (loadingPaths.isNotEmpty()) {
+            LoadingBanner("Loading JSON branch...")
+        }
+
         Box(modifier = Modifier.horizontalScroll(horizontalScrollState)) {
             if (enableInternalScroll) {
                 LazyColumn(
@@ -127,13 +227,23 @@ fun JsonTreeViewer(
                         .fillMaxWidth()
                         .wrapContentWidth()
                 ) {
-                    itemsIndexed(rows, key = { _, item -> item.path }) { index, row ->
+                    itemsIndexed(visibleRows, key = { _, item -> item.path }) { index, row ->
                         JsonRow(
                             row = row,
-                            isMatch = matches.contains(index),
+                            isMatch = row.path in matchedPaths,
                             isActive = activeItemIndex == index,
-                            expanded = expanded,
-                            interactionsEnabled = !forceExpandAll
+                            isExpanded = row.path in effectiveExpandedPaths,
+                            onToggle = { path ->
+                                handleToggle(
+                                    path = path,
+                                    expanded = expanded,
+                                    loadingPaths = loadingPaths,
+                                    forceLazyMode = forceLazyMode,
+                                    rootNode = rootNode,
+                                    updateRoot = { rootNode = it },
+                                    scope = scope
+                                )
+                            }
                         )
                     }
                 }
@@ -143,13 +253,23 @@ fun JsonTreeViewer(
                         .fillMaxWidth()
                         .wrapContentWidth()
                 ) {
-                    rows.forEachIndexed { index, row ->
+                    visibleRows.forEachIndexed { index, row ->
                         JsonRow(
                             row = row,
-                            isMatch = matches.contains(index),
+                            isMatch = row.path in matchedPaths,
                             isActive = activeItemIndex == index,
-                            expanded = expanded,
-                            interactionsEnabled = !forceExpandAll
+                            isExpanded = row.path in effectiveExpandedPaths,
+                            onToggle = { path ->
+                                handleToggle(
+                                    path = path,
+                                    expanded = expanded,
+                                    loadingPaths = loadingPaths,
+                                    forceLazyMode = forceLazyMode,
+                                    rootNode = rootNode,
+                                    updateRoot = { rootNode = it },
+                                    scope = scope
+                                )
+                            }
                         )
                     }
                 }
@@ -158,15 +278,66 @@ fun JsonTreeViewer(
     }
 }
 
+private fun handleToggle(
+    path: String,
+    expanded: MutableMap<String, Boolean>,
+    loadingPaths: MutableMap<String, Boolean>,
+    forceLazyMode: Boolean,
+    rootNode: JsonNode,
+    updateRoot: (JsonNode) -> Unit,
+    scope: CoroutineScope
+) {
+    if (expanded[path] == true) {
+        expanded[path] = false
+        return
+    }
+
+    if (!forceLazyMode) {
+        expanded[path] = true
+        return
+    }
+
+    val targetNode = JsonTreeDocument.findNodeAtPath(rootNode, path)
+    if (targetNode == null || !JsonTreeDocument.isLazyContainer(targetNode)) {
+        expanded[path] = true
+        return
+    }
+
+    loadingPaths[path] = true
+    scope.launch {
+        val updatedRoot = withContext(Dispatchers.Default) {
+            JsonTreeDocument.expandNodeAtPath(rootNode, path)
+        }
+        updateRoot(updatedRoot)
+        expanded[path] = true
+        loadingPaths.remove(path)
+    }
+}
+
+@Composable
+private fun LoadingBanner(label: String) {
+    Row(
+        modifier = Modifier.padding(horizontal = 10.dp, vertical = 9.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        CircularProgressIndicator(
+            modifier = Modifier.size(16.dp),
+            strokeWidth = 2.dp
+        )
+        Spacer(modifier = Modifier.width(8.dp))
+        Text(label, style = MaterialTheme.typography.bodySmall)
+    }
+}
+
 @Composable
 private fun JsonRow(
     row: JsonRenderRow,
     isMatch: Boolean,
     isActive: Boolean,
-    expanded: MutableMap<String, Boolean>,
-    interactionsEnabled: Boolean
+    isExpanded: Boolean,
+    onToggle: (String) -> Unit
 ) {
-    val bg = when {
+    val background = when {
         isActive -> NILColors.jsonActiveMatch()
         isMatch -> NILColors.jsonMatch()
         else -> Color.Transparent
@@ -175,62 +346,33 @@ private fun JsonRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .background(bg, RoundedCornerShape(6.dp))
+            .background(background, RoundedCornerShape(6.dp))
             .padding(vertical = 4.dp, horizontal = 4.dp)
             .animateContentSize()
-            .clickable(enabled = interactionsEnabled) { expanded[row.path] = expanded[row.path] != true },
+            .clickable(enabled = row.isExpandable) { onToggle(row.path) },
         verticalAlignment = Alignment.CenterVertically
-
     ) {
         Spacer(modifier = Modifier.width((row.depth * 12).dp))
         when (row.type) {
-            JsonRowType.ObjectOpen -> {
-                val isExpanded = expanded[row.path] == true
-                Icon(
-                    imageVector = if (isExpanded) Icons.Filled.ExpandMore else Icons.Filled.ChevronRight,
-                    contentDescription = null,
-                    modifier = Modifier
-                        .size(16.dp),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Text(
-                    text = objectOrArrayLabel(
-                        key = row.key,
-                        openingBrace = "{",
-                        isExpanded = isExpanded
-                    ),
-                    style = MaterialTheme.typography.bodySmall
-                )
-            }
+            JsonRowType.ObjectOpen -> ExpandableLabel(
+                isExpanded = isExpanded,
+                text = objectOrArrayLabel(row.key, "{", isExpanded)
+            )
 
-            JsonRowType.ArrayOpen -> {
-                val isExpanded = expanded[row.path] == true
-                Icon(
-                    imageVector = if (isExpanded) Icons.Filled.ExpandMore else Icons.Filled.ChevronRight,
-                    contentDescription = null,
-                    modifier = Modifier
-                        .size(16.dp),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Text(
-                    text = objectOrArrayLabel(
-                        key = row.key,
-                        openingBrace = "[",
-                        isExpanded = isExpanded
-                    ),
-                    style = MaterialTheme.typography.bodySmall
-                )
-            }
+            JsonRowType.ArrayOpen -> ExpandableLabel(
+                isExpanded = isExpanded,
+                text = objectOrArrayLabel(row.key, "[", isExpanded)
+            )
 
             JsonRowType.ObjectClose,
             JsonRowType.ArrayClose,
+            JsonRowType.Loading,
             JsonRowType.Value -> {
                 Spacer(modifier = Modifier.width(16.dp))
                 Text(
-                    text = if (row.type == JsonRowType.Value) {
-                        valueLabel(key = row.key, value = row.value.orEmpty())
-                    } else {
-                        buildAnnotatedString { append(row.value.orEmpty()) }
+                    text = when (row.type) {
+                        JsonRowType.Value -> valueLabel(row.key, row.value.orEmpty())
+                        else -> buildAnnotatedString { append(row.value.orEmpty()) }
                     },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -240,150 +382,15 @@ private fun JsonRow(
     }
 }
 
-private fun appendRows(
-    node: JsonNode,
-    path: String,
-    depth: Int,
-    expanded: Map<String, Boolean>,
-    out: MutableList<JsonRenderRow>,
-    pathFilter: String? = null,
-    forceExpandAll: Boolean = false
-) {
-    if (pathFilter != null && !node.shouldIncludeForPathFilter(path, pathFilter)) return
-
-    when (node) {
-        is JsonNode.ObjectNode -> {
-            val key = displayKey(node.key, depth)
-            val isExpanded = if (forceExpandAll || pathFilter != null) true else expanded[path] == true
-            out += JsonRenderRow(
-                path = path,
-                depth = depth,
-                type = JsonRowType.ObjectOpen,
-                key = key,
-                value = null,
-                isExpanded = isExpanded,
-                searchText = "$key {"
-            )
-
-            if (isExpanded) {
-                node.children.forEach { (childKey, child) ->
-                    appendRows(
-                        node = child.withKeyIfMissing(childKey),
-                        path = "$path.$childKey",
-                        depth = depth + 1,
-                        expanded = expanded,
-                        out = out,
-                        pathFilter = pathFilter,
-                        forceExpandAll = forceExpandAll
-                    )
-                }
-                out += JsonRenderRow(
-                    path = "$path#close",
-                    depth = depth,
-                    type = JsonRowType.ObjectClose,
-                    key = null,
-                    value = "}",
-                    isExpanded = false,
-                searchText = "}"
-                )
-            }
-        }
-
-        is JsonNode.ArrayNode -> {
-            val key = displayKey(node.key, depth)
-            val isExpanded = if (forceExpandAll || pathFilter != null) true else expanded[path] == true
-            out += JsonRenderRow(
-                path = path,
-                depth = depth,
-                type = JsonRowType.ArrayOpen,
-                key = key,
-                value = null,
-                isExpanded = isExpanded,
-                searchText = "$key ["
-            )
-
-            if (isExpanded) {
-                node.items.forEachIndexed { idx, child ->
-                    val key = "[$idx]"
-                    appendRows(
-                        node = child.withKeyIfMissing(key),
-                        path = "$path$key",
-                        depth = depth + 1,
-                        expanded = expanded,
-                        out = out,
-                        pathFilter = pathFilter,
-                        forceExpandAll = forceExpandAll
-                    )
-                }
-                out += JsonRenderRow(
-                    path = "$path#close",
-                    depth = depth,
-                    type = JsonRowType.ArrayClose,
-                    key = null,
-                    value = "]",
-                    isExpanded = false,
-                    searchText = "]"
-                )
-            }
-        }
-
-        is JsonNode.ValueNode -> {
-            val key = displayKey(node.key, depth)
-            out += JsonRenderRow(
-                path = path,
-                depth = depth,
-                type = JsonRowType.Value,
-                key = key,
-                value = node.value,
-                isExpanded = false,
-                searchText = "$key ${node.value}"
-            )
-        }
-    }
-}
-
-private fun JsonRenderRow.matchesQuery(query: String, pathSearchMode: Boolean): Boolean {
-    val normalizedPath = path.removePrefix("root").replace("#close", "")
-    val normalizedQuery = query.trim()
-    if (normalizedQuery.isEmpty()) return false
-    if (pathSearchMode) return normalizedPath.contains(normalizedQuery, ignoreCase = true)
-    val tokens = normalizedQuery.split(Regex("\\s+")).filter { it.isNotBlank() }
-    if (tokens.isEmpty()) return false
-    return tokens.all { token ->
-        val term = token.removePrefix("path:").removePrefix("p:")
-        if (token.startsWith("path:", ignoreCase = true) || token.startsWith("p:", ignoreCase = true)) {
-            normalizedPath.contains(term, ignoreCase = true)
-        } else {
-            searchText.contains(token, ignoreCase = true) || normalizedPath.contains(token, ignoreCase = true)
-        }
-    }
-}
-
-private fun JsonNode.shouldIncludeForPathFilter(path: String, filter: String): Boolean {
-    val normalizedPath = path.removePrefix("root")
-    if (normalizedPath.contains(filter, ignoreCase = true)) return true
-
-    return when (this) {
-        is JsonNode.ObjectNode -> children.any { (childKey, child) ->
-            child.shouldIncludeForPathFilter("$path.$childKey", filter)
-        }
-        is JsonNode.ArrayNode -> items.anyIndexed { idx, child ->
-            child.shouldIncludeForPathFilter("$path[$idx]", filter)
-        }
-        is JsonNode.ValueNode -> false
-    }
-}
-
-private inline fun <T> List<T>.anyIndexed(predicate: (Int, T) -> Boolean): Boolean {
-    for (index in indices) {
-        if (predicate(index, this[index])) return true
-    }
-    return false
-}
-
-private fun displayKey(key: String?, depth: Int): String? {
-    if (depth == 0 && key.isNullOrBlank()) return null
-    return key ?: ""
+@Composable
+private fun ExpandableLabel(isExpanded: Boolean, text: AnnotatedString) {
+    Icon(
+        imageVector = if (isExpanded) Icons.Filled.ExpandMore else Icons.Filled.ChevronRight,
+        contentDescription = null,
+        modifier = Modifier.size(16.dp),
+        tint = MaterialTheme.colorScheme.onSurfaceVariant
+    )
+    Text(text = text, style = MaterialTheme.typography.bodySmall)
 }
 
 @Composable
@@ -404,20 +411,12 @@ private fun objectOrArrayLabel(key: String?, openingBrace: String, isExpanded: B
 @Composable
 private fun valueLabel(key: String?, value: String) = buildAnnotatedString {
     if (!key.isNullOrBlank()) {
-        withStyle(SpanStyle(color = NILColors.jsonKey())) {
-            append("\"$key\"")
-        }
+        withStyle(SpanStyle(color = NILColors.jsonKey())) { append("\"$key\"") }
         append(": ")
     }
     withStyle(SpanStyle(color = valueColor(value))) {
         append(value)
     }
-}
-
-private fun JsonNode.withKeyIfMissing(fallback: String): JsonNode = when (this) {
-    is JsonNode.ObjectNode -> if (key == null) copy(key = fallback) else this
-    is JsonNode.ArrayNode -> if (key == null) copy(key = fallback) else this
-    is JsonNode.ValueNode -> if (key == null) copy(key = fallback) else this
 }
 
 @Composable
@@ -427,20 +426,17 @@ private fun valueColor(value: String) = when {
     else -> NILColors.jsonString()
 }
 
-private data class JsonRenderRow(
-    val path: String,
-    val depth: Int,
-    val type: JsonRowType,
-    val key: String?,
-    val value: String?,
-    val isExpanded: Boolean,
-    val searchText: String
-)
+private sealed interface JsonDocumentState {
+    data object Loading : JsonDocumentState
+    data class Ready(
+        val root: JsonNode,
+        val searchEntries: List<JsonSearchEntry>
+    ) : JsonDocumentState
+    data class Error(val message: String) : JsonDocumentState
+}
 
-private enum class JsonRowType {
-    ObjectOpen,
-    ObjectClose,
-    ArrayOpen,
-    ArrayClose,
-    Value
+private sealed interface JsonSearchState {
+    data object Idle : JsonSearchState
+    data object Loading : JsonSearchState
+    data class Ready(val matches: List<JsonSearchEntry>) : JsonSearchState
 }

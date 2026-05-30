@@ -1,3 +1,7 @@
+/**
+ * Created by Sandesh Yele on 16/05/26.
+ */
+
 package com.sandesh.nil.core
 
 import android.app.Application
@@ -5,28 +9,33 @@ import android.content.Context
 import com.sandesh.nil.database.DatabaseProvider
 import com.sandesh.nil.interceptor.NILInterceptor
 import com.sandesh.nil.model.NetworkEvent
+import com.sandesh.nil.model.NetworkEventSummary
 import com.sandesh.nil.overlay.NILFloatingButtonController
 import com.sandesh.nil.storage.NILRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 
 object NIL {
-    private const val DEFAULT_JSON_TREE_MAX_CHARS = 200_000
-    private const val DEFAULT_ANALYSE_LAZY_TEXT_THRESHOLD_CHARS = 200_000
-    private const val DEFAULT_REQUEST_WINDOW_SIZE = 100
+    enum class InterceptorType {
+        OK_HTTP,
+        HTTP_URL_CONNECTION
+    }
+
+    private const val DEFAULT_INSPECTOR_PAYLOAD_CHAR_LIMIT = 200_000
+    private const val DEFAULT_MAX_STORED_EVENTS = 100
 
     private val interceptor = NILInterceptor()
 
     @Volatile
     private var initialized = false
     @Volatile
-    private var jsonTreeMaxChars: Int = DEFAULT_JSON_TREE_MAX_CHARS
+    private var persistenceEnabled: Boolean = true
     @Volatile
-    private var analyseLazyTextThresholdChars: Int = DEFAULT_ANALYSE_LAZY_TEXT_THRESHOLD_CHARS
+    private var inspectorPayloadCharLimit: Int = DEFAULT_INSPECTOR_PAYLOAD_CHAR_LIMIT
     private val _isLoggingPaused = MutableStateFlow(false)
     val isLoggingPaused: StateFlow<Boolean> get() = _isLoggingPaused
 
-    val events: StateFlow<List<NetworkEvent>> get() = NILRepository.events
+    val events: StateFlow<List<NetworkEventSummary>> get() = NILRepository.events
 
     /**
      * SDK initialization
@@ -34,31 +43,28 @@ object NIL {
     fun initialize(
         context: Context,
         enableFloatingButton: Boolean = false,
-        jsonTreeMaxChars: Int = DEFAULT_JSON_TREE_MAX_CHARS,
-        analyseLazyTextThresholdChars: Int = DEFAULT_ANALYSE_LAZY_TEXT_THRESHOLD_CHARS,
-        requestWindowSize: Int = DEFAULT_REQUEST_WINDOW_SIZE,
-        disablePersistence: Boolean = false
+        inspectorPayloadCharLimit: Int = DEFAULT_INSPECTOR_PAYLOAD_CHAR_LIMIT,
+        maxStoredEvents: Int = DEFAULT_MAX_STORED_EVENTS,
+        persistenceEnabled: Boolean = true
     ) {
-        this.jsonTreeMaxChars = jsonTreeMaxChars.coerceAtLeast(1_000)
-        this.analyseLazyTextThresholdChars = analyseLazyTextThresholdChars.coerceAtLeast(10_000)
-        val normalizedWindowSize = requestWindowSize.takeIf { it > 0 } ?: DEFAULT_REQUEST_WINDOW_SIZE
+        this.inspectorPayloadCharLimit = inspectorPayloadCharLimit.coerceAtLeast(10_000)
+        this.persistenceEnabled = persistenceEnabled
+        if (initialized) return
+
         val appContext = context.applicationContext
 
-        if (!initialized) {
-            val database = if (disablePersistence) null else DatabaseProvider.getDatabase(appContext)
-            NILRepository.initialize(database)
-            initialized = true
-        } else if (!disablePersistence) {
-            NILRepository.setDatabase(DatabaseProvider.getDatabase(appContext))
-        }
-        NILRepository.configure(
-            disablePersistence = disablePersistence,
-            requestWindowSize = normalizedWindowSize
+        val database = if (persistenceEnabled) DatabaseProvider.getDatabase(appContext) else null
+        NILRepository.initialize(
+            db = database,
+            persistenceEnabled = persistenceEnabled,
+            maxStoredEvents = maxStoredEvents
         )
 
         if (enableFloatingButton && appContext is Application) {
             NILFloatingButtonController.initialize(appContext)
         }
+
+        initialized = true
     }
 
     /**
@@ -67,16 +73,17 @@ object NIL {
     fun interceptor(): NILInterceptor = interceptor
 
     /**
-     * Unified interceptor entry point with explicit type selection.
-     * Supported values: "okhttp", "httpurl", "httpurlconnection"
+     * Type-safe interceptor entry point with explicit transport selection.
      */
-    fun interceptor(type: String): NILInterceptor {
-        val normalizedType = type.trim().lowercase()
-        require(normalizedType in setOf("okhttp", "httpurl", "httpurlconnection")) {
-            "Unsupported interceptor type: $type"
-        }
+    fun interceptor(type: InterceptorType): NILInterceptor {
         return interceptor
     }
+
+    @Deprecated(
+        message = "Use the enum overload instead to avoid invalid transport strings.",
+        replaceWith = ReplaceWith("interceptor(InterceptorType.HTTP_URL_CONNECTION)")
+    )
+    fun interceptor(type: String): NILInterceptor = interceptor(type.toInterceptorType())
 
     fun setFilter(query: String) {
         NILRepository.observeEvents(query)
@@ -92,8 +99,7 @@ object NIL {
 
     fun shouldLogEvents(): Boolean = !_isLoggingPaused.value
 
-    fun jsonTreeMaxChars(): Int = jsonTreeMaxChars
-    fun analyseLazyTextThresholdChars(): Int = analyseLazyTextThresholdChars
+    fun inspectorPayloadCharLimit(): Int = inspectorPayloadCharLimit
 
     fun clearEvents() {
         NILRepository.clearAsync()
@@ -107,4 +113,16 @@ object NIL {
         NILRepository.setPinned(eventId = eventId, pinned = pinned)
     }
 
+    suspend fun getEventById(eventId: String): NetworkEvent? {
+        return NILRepository.getEventById(eventId)
+    }
+
+}
+
+private fun String.toInterceptorType(): NIL.InterceptorType {
+    return when (trim().lowercase()) {
+        "okhttp" -> NIL.InterceptorType.OK_HTTP
+        "httpurl", "httpurlconnection" -> NIL.InterceptorType.HTTP_URL_CONNECTION
+        else -> throw IllegalArgumentException("Unsupported interceptor type: $this")
+    }
 }

@@ -7,9 +7,9 @@ It captures request/response data, stores events locally with Room, and provides
 
 ## What It Does
 
-- Captures HTTP traffic via a single API: `NIL.interceptor()` (OkHttp) or `NIL.interceptor("httpURL")` (HttpURLConnection).
+- Captures HTTP traffic via a single API: `NIL.interceptor()` (OkHttp) or `NIL.interceptor(NIL.InterceptorType.HTTP_URL_CONNECTION)` (HttpURLConnection).
 - Persists events in local Room database.
-- Optional in-memory mode (`disablePersistence = true`) to avoid Room storage entirely.
+- Optional non-persistent mode (`persistenceEnabled = false`) to avoid Room storage entirely.
 - Provides inspector UI (`NILInspectorActivity`) with:
 - Event list with search.
 - Status code filter (2xx/3xx/4xx/5xx).
@@ -36,7 +36,7 @@ Key package areas in `:nil`:
 ## Requirements
 
 - Android Studio (recent version with AGP 9 support).
-- JDK 11+
+- JDK 17+
 - Android SDK:
 - Library compile SDK: `35`
 - Sample app compile/target SDK: `36`
@@ -45,7 +45,7 @@ Key package areas in `:nil`:
 ## Installation (Maven Central)
 
 ```kotlin
-implementation("io.github.sandeshyele2000:nil:1.0.4")
+implementation("io.github.sandeshyele2000:nil:1.0.5")
 ```
 
 ## Quick Start
@@ -56,10 +56,9 @@ implementation("io.github.sandeshyele2000:nil:1.0.4")
 NIL.initialize(
     context = applicationContext,
     enableFloatingButton = true, // optional
-    jsonTreeMaxChars = 200_000, // optional
-    analyseLazyTextThresholdChars = 200_000, // optional
-    requestWindowSize = 500, // optional; keeps latest 500 unpinned requests
-    disablePersistence = false // optional; true => skip Room persistence
+    inspectorPayloadCharLimit = 200_000, // optional; persisted request/response body cap
+    maxStoredEvents = 500, // optional; keeps latest 500 events
+    persistenceEnabled = true // optional; false => skip Room persistence
 )
 ```
 
@@ -82,7 +81,7 @@ val connection = (URL("https://httpbin.org/get?from=http-url-connection").openCo
     requestMethod = "GET"
 }
 
-val responseBody = NIL.interceptor("httpURL").intercept(
+val responseBody = NIL.interceptor(NIL.InterceptorType.HTTP_URL_CONNECTION).intercept(
     connection = connection,
     execute = { it.inputStream.bufferedReader().use { reader -> reader.readText() } },
     responseBodyExtractor = { it }
@@ -91,30 +90,32 @@ val responseBody = NIL.interceptor("httpURL").intercept(
 
 ## Public API
 
-### `NIL.initialize(context, enableFloatingButton = false, jsonTreeMaxChars = 200_000, analyseLazyTextThresholdChars = 200_000, requestWindowSize = 100, disablePersistence = false)`
+### `NIL.initialize(context, enableFloatingButton = false, inspectorPayloadCharLimit = 200_000, maxStoredEvents = 100, persistenceEnabled = true)`
 
-Initializes database/repository, optional floating inspector button, and JSON tree rendering threshold.
-Safe to call multiple times; initialization runs once, while configuration values are refreshed on subsequent calls.
+Initializes database/repository and the optional floating inspector button.
+Initialization runs once.
 
-- `jsonTreeMaxChars` controls the max payload size (in characters) eligible for JSON tree mode in Detail/Analyse screens.
-- Above this limit, the SDK falls back to raw text mode and export/share actions.
-- `analyseLazyTextThresholdChars` controls when Analyse switches to lazy chunked raw-text rendering to avoid heavy allocations on very large payloads.
-- `requestWindowSize` sets a sliding window for retained requests (latest N unpinned events are kept; older unpinned events are dropped).
-- `disablePersistence = true` disables Room-backed storage and keeps events in-memory only for the current process lifetime.
+- `inspectorPayloadCharLimit` caps persisted request/response payload text. Larger payloads are truncated before storage.
+- `maxStoredEvents` trims stored history to the latest N events.
+- `persistenceEnabled = false` disables Room-backed storage and keeps events in-memory only for the current process lifetime.
 
 ### `NIL.interceptor()`
 
 Returns the singleton interceptor for OkHttp usage.
 
-### `NIL.interceptor(type: String)`
+### `NIL.interceptor(type: NIL.InterceptorType)`
 
 Single entrypoint with explicit transport selection.
-Use `NIL.interceptor("httpURL").intercept(...)` to wrap `HttpURLConnection` execution and log request/response details.
+Use `NIL.interceptor(NIL.InterceptorType.HTTP_URL_CONNECTION).intercept(...)` to wrap `HttpURLConnection` execution and log request/response details.
 
-### `NIL.events: StateFlow<List<NetworkEvent>>`
+### `NIL.events: StateFlow<List<NetworkEventSummary>>`
 
-Reactive stream of captured events.
+Reactive stream of captured event summaries for list rendering.
 Useful if you want to build your own custom UI.
+
+### `NIL.getEventById(eventId: String)`
+
+Suspend API that returns the full `NetworkEvent` for a selected summary item.
 
 ### `NIL.setFilter(query: String)`
 
@@ -138,7 +139,7 @@ Suspend variant that clears events and waits for completion.
 From the built-in inspector you can:
 
 - Browse captured traffic in reverse chronological order.
-- Search URL/method/body text.
+- Search URL/method text.
 - Filter by status code groups.
 - Pause logging while reproducing flows.
 - Open event details:
@@ -184,14 +185,15 @@ Run tests:
 2. Executes network call.
 3. Reads response body safely for logging.
 4. Persists `NetworkEvent` via `NILRepository`.
-5. `NILRepository` exposes events as `StateFlow` from Room observers.
+5. `NILRepository` exposes `NetworkEventSummary` items as `StateFlow` from Room observers and loads full events on demand.
 6. Inspector screens consume this reactive stream.
 
 ## Notes & Limitations
 
 - N.I.L captures calls made by OkHttp clients where `NIL.interceptor()` is added.
-- For `HttpURLConnection`, calls are captured only when execution is wrapped with `NIL.interceptor("httpURL").intercept(...)`.
+- For `HttpURLConnection`, calls are captured only when execution is wrapped with `NIL.interceptor(NIL.InterceptorType.HTTP_URL_CONNECTION).intercept(...)`.
 - Capture includes request/response body as strings; avoid enabling in production if payloads may contain sensitive data.
+- Large payloads are truncated before persistence based on `inspectorPayloadCharLimit`.
 - Floating button requires initialization with an `Application` context to attach across activities.
 
 ## Development
